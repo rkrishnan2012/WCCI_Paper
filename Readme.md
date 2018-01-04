@@ -1,5 +1,5 @@
-# Mask Inception-V4
-## A convolutional network based on Mask-RCNN with an Inception V4 backbone architecture used to classify food images.
+# Food-ception
+## A convolutional network with an Inception V4 backbone architecture used to classify food images.
 
 
 ### Dataset Preparation
@@ -19,6 +19,8 @@ The primary dataset used in this paper to perform classification is the Food-101
     python3 convert_dataset.py --tfrecord_filename=foods --dataset_dir="../Dataset/food-101/images"
     cd ..
     ```
+
+### Train the model
 
 * Download the Inception V4 checkpoint file, extract it to Code folder.
     ```

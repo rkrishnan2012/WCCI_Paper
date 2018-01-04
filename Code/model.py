@@ -6,7 +6,6 @@
 #   * Train a Inception_V4 network using the Food-101 dataset - incomplete
 #
 import tensorflow as tf
-from tensorflow.contrib.framework.python.ops.variables import get_or_create_global_step
 from tensorflow.python.platform import tf_logging as logging
 import inception_preprocessing
 from inception_v4 import inception_v4
@@ -15,49 +14,37 @@ from dataset_utils import read_label_file
 import os
 import time
 slim = tf.contrib.slim
+get_or_create_global_step = tf.train.get_or_create_global_step
 
-#================ DATASET INFORMATION ======================
-# State dataset directory where the tfrecord files are located
-dataset_dir = '../Dataset/food-101/images'
+# =============== CONFIGURATION ===============
+DATASET_DIR = '../Dataset/food-101/images'
 
-# State where your log file is at. If it doesn't exist, create it.
-log_dir = './log'
+LOG_DIR = './log'
 
-# State where your checkpoint file is
-checkpoint_file = './inception_v4.ckpt'
+CHECKPOINT_FILE = './inception_v4.ckpt'
 
-# State the image size you're resizing your images to. We will use the default inception size of 299.
-image_size = 299
+IMAGE_SIZE = 299
 
-# State the number of classes to predict:
-num_classes = 101
+NUM_CLASSES = 101
 
+TFRECORD_FILE_PATTERN = 'foods_%s_*.tfrecord'
 
-#Create the file pattern of your TFRecord files so that it could be recognized later on
-file_pattern = 'foods_%s_*.tfrecord'
+STEPS_PER_EPOCH = 100
 
-#Create a dictionary that will help people understand your dataset better. This is required by the Dataset class later.
-items_to_descriptions = {
-    'image': 'A 3-channel RGB coloured food image',
-    'label': 'A label'
-}
+NUM_EPOCHS = 300
 
+IMAGES_PER_GPU = 8
 
-#================= TRAINING INFORMATION ==================
-#State the number of epochs to train
-num_epochs = 1000
+GPU_COUNT = 1
 
-#State your batch size
-batch_size = 8
+BATCH_SIZE = IMAGES_PER_GPU * GPU_COUNT
 
-#Learning rate information and configuration (Up to you to experiment)
-initial_learning_rate = 0.0002
-learning_rate_decay_factor = 0.7
-num_epochs_before_decay = 2
+LEARNING_RATE = 0.002
+
+MOMENTUM = 0.9
 
 #============== DATASET LOADING ======================
-#We now create a function that creates a Dataset class which will give us many TFRecord files to feed in the examples into a queue in parallel.
-def get_split(split_name, dataset_dir, file_pattern=file_pattern, file_pattern_for_counting='foods'):
+def get_split(split_name, dataset_dir, file_pattern=TFRECORD_FILE_PATTERN, file_pattern_for_counting='foods'):
     '''
     Obtains the split - training or validation - to create a Dataset class for feeding the examples into a queue later on. This function will
     set up the decoder and dataset information all into one Dataset class so that you can avoid the brute work later on.
@@ -71,14 +58,14 @@ def get_split(split_name, dataset_dir, file_pattern=file_pattern, file_pattern_f
     - dataset (Dataset): A Dataset class object where we can read its various components for easier batch creation later.
     '''
 
-    #First check whether the split_name is train or validation
+    # First check whether the split_name is train or validation
     if split_name not in ['train', 'validation']:
         raise ValueError('The split_name %s is not recognized. Please input either train or validation as the split_name' % (split_name))
 
-    #Create the full path for a general file_pattern to locate the tfrecord_files
+    # Create the full path for a general file_pattern to locate the tfrecord_files
     file_pattern_path = os.path.join(dataset_dir, file_pattern % (split_name))
 
-    #Count the total number of examples in all of these shard
+    # Count the total number of examples in all of these shard
     num_samples = 0
     file_pattern_for_counting = file_pattern_for_counting + '_' + split_name
     tfrecords_to_count = [os.path.join(dataset_dir, file) for file in os.listdir(dataset_dir) if file.startswith(file_pattern_for_counting)]
@@ -86,10 +73,10 @@ def get_split(split_name, dataset_dir, file_pattern=file_pattern, file_pattern_f
         for record in tf.python_io.tf_record_iterator(tfrecord_file):
             num_samples += 1
 
-    #Create a reader, which must be a TFRecord reader in this case
+    # Create a reader, which must be a TFRecord reader in this case
     reader = tf.TFRecordReader
 
-    #Create the keys_to_features dictionary for the decoder
+    # Create the keys_to_features dictionary for the decoder
     keys_to_features = {
       'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
       'image/format': tf.FixedLenFeature((), tf.string, default_value='jpg'),
@@ -97,10 +84,16 @@ def get_split(split_name, dataset_dir, file_pattern=file_pattern, file_pattern_f
           [], tf.int64, default_value=tf.zeros([], dtype=tf.int64)),
     }
 
-    #Create the items_to_handlers dictionary for the decoder.
+    # Create the items_to_handlers dictionary for the decoder.
     items_to_handlers = {
     'image': slim.tfexample_decoder.Image(),
     'label': slim.tfexample_decoder.Tensor('image/class/label'),
+    }
+
+    # Create the items_to_descriptions dictionary for the decoder.
+    items_to_descriptions = {
+        'image': 'A 3-channel RGB coloured flower image that is either tulips, sunflowers, roses, dandelion, or daisy.',
+        'label': 'A label that is as such -- 0:daisy, 1:dandelion, 2:roses, 3:sunflowers, 4:tulips'
     }
 
     #Start to create the decoder
@@ -116,14 +109,14 @@ def get_split(split_name, dataset_dir, file_pattern=file_pattern, file_pattern_f
         reader = reader,
         num_readers = 4,
         num_samples = num_samples,
-        num_classes = num_classes,
+        num_classes = NUM_CLASSES,
         labels_to_name = labels_to_name_dict,
-        items_to_descriptions = items_to_descriptions)
+        items_to_descriptions=items_to_descriptions)
 
     return dataset
 
 
-def load_batch(dataset, batch_size, height=image_size, width=image_size, is_training=True):
+def load_batch(dataset, batch_size, height=IMAGE_SIZE, width=IMAGE_SIZE, is_training=True):
     '''
     Loads a batch for training.
     INPUTS:
@@ -165,72 +158,50 @@ def load_batch(dataset, batch_size, height=image_size, width=image_size, is_trai
 
 def run():
     #Create the log directory here. Must be done here otherwise import will activate this unneededly.
-    if not os.path.exists(log_dir):
-        os.mkdir(log_dir)
+    if not os.path.exists(LOG_DIR):
+        os.mkdir(LOG_DIR)
 
     #======================= TRAINING PROCESS =========================
-    #Now we start to construct the graph and build our model
     with tf.Graph().as_default() as graph:
         tf.logging.set_verbosity(tf.logging.INFO) #Set the verbosity to INFO level
 
-        #First create the dataset and load one batch
-        dataset = get_split('train', dataset_dir, file_pattern=file_pattern)
-        images, _, labels = load_batch(dataset, batch_size=batch_size)
+        # First create the dataset and load one batch
+        dataset = get_split('train', DATASET_DIR, file_pattern=TFRECORD_FILE_PATTERN)
+        train_images, _, train_labels = load_batch(dataset, batch_size=BATCH_SIZE)
 
-        # Create the validation set
-        validation_dataset = get_split('validation', dataset_dir, file_pattern=file_pattern)
-        val_images, _, val_labels = load_batch(validation_dataset, batch_size=batch_size)
-        
+        # Perform one-hot-encoding of the labels (Try one-hot-encoding within the load_batch function!)
+        one_hot_labels = slim.one_hot_encoding(train_labels, dataset.num_classes)
 
-        #Know the number steps to take before decaying the learning rate and batches per epoch
-        num_batches_per_epoch = int(dataset.num_samples / batch_size)
-        num_steps_per_epoch = num_batches_per_epoch #Because one step is one batch processed
-        decay_steps = int(num_epochs_before_decay * num_steps_per_epoch)
-
-        #Create the model inference
+        # Create the training model and the validation model (which doesn't have dropout)
         with slim.arg_scope(inception_arg_scope()):
-            logits, end_points = inception_v4(images, num_classes = dataset.num_classes, is_training = True)
+            logits, end_points = inception_v4(train_images, num_classes = dataset.num_classes, is_training = True)
 
-        #Define the scopes that you want to exclude for restoration
+        # Define the scopes that you want to exclude for restoration
         exclude = ['InceptionV4/Logits', 'InceptionV4/AuxLogits']
         variables_to_restore = slim.get_variables_to_restore(exclude = exclude)
 
-        #Perform one-hot-encoding of the labels (Try one-hot-encoding within the load_batch function!)
-        one_hot_labels = slim.one_hot_encoding(labels, dataset.num_classes)
-
-        #Performs the equivalent to tf.nn.sparse_softmax_cross_entropy_with_logits but enhanced with checks
+        # Performs the equivalent to tf.nn.sparse_softmax_cross_entropy_with_logits but enhanced with checks
         loss = tf.losses.softmax_cross_entropy(onehot_labels = one_hot_labels, logits = logits)
-        total_loss = tf.losses.get_total_loss()    #obtain the regularization losses as well
+        total_loss = tf.losses.get_total_loss()    # obtain the regularization losses as well
 
-        #Create the global step for monitoring the learning_rate and training.
-        global_step = tf.train.get_or_create_global_step()
+        # Now we can define the optimizer that takes on the learning rate
+        optimizer = tf.train.MomentumOptimizer(learning_rate=LEARNING_RATE, momentum=MOMENTUM)
 
-        #Define your exponentially decaying learning rate
-        lr = tf.train.exponential_decay(
-            learning_rate = initial_learning_rate,
-            global_step = global_step,
-            decay_steps = decay_steps,
-            decay_rate = learning_rate_decay_factor,
-            staircase = True)
-
-        #Now we can define the optimizer that takes on the learning rate
-        optimizer = tf.train.AdamOptimizer(learning_rate = lr)
-
-        #Create the train_op.
+        # Create the train_op.
         train_op = slim.learning.create_train_op(total_loss, optimizer)
 
-        #State the metrics that you want to predict. We get a predictions that is not one_hot_encoded.
+        # State the metrics that you want to predict. We get a predictions that is not one_hot_encoded.
         predictions = tf.argmax(end_points['Predictions'], 1)
         probabilities = end_points['Predictions']
-        accuracy, accuracy_update = tf.contrib.metrics.streaming_accuracy(predictions, labels)
+
+        accuracy, accuracy_update = tf.contrib.metrics.streaming_accuracy(predictions, train_labels)
         
         metrics_op = tf.group(accuracy_update, probabilities)
-
 
         #Now finally create all the summaries you need to monitor and group them into one summary op.
         tf.summary.scalar('losses/Total_Loss', total_loss)
         tf.summary.scalar('accuracy', accuracy)
-        tf.summary.scalar('learning_rate', lr)
+        tf.summary.scalar('learning_rate', LEARNING_RATE)
         my_summary_op = tf.summary.merge_all()
 
         #Now we need to create a training step function that runs both the train_op, metrics_op and updates the global_step concurrently.
@@ -254,21 +225,20 @@ def run():
             return saver.restore(sess, checkpoint_file)
 
         #Define your supervisor for running a managed session. Do not run the summary_op automatically or else it will consume too much memory
-        sv = tf.train.Supervisor(logdir = log_dir, summary_op = None, init_fn = restore_fn)
-
+        sv = tf.train.Supervisor(logdir = LOG_DIR, summary_op = None, init_fn = restore_fn)
 
         #Run the managed session
         with sv.managed_session() as sess:
-            for step in range(num_steps_per_epoch * num_epochs):
+            for step in range(STEPS_PER_EPOCH * NUM_EPOCHS):
                 #At the start of every epoch, show the vital information:
-                if step % num_batches_per_epoch == 0:
-                    logging.info('Epoch %s/%s', step/num_batches_per_epoch + 1, num_epochs)
-                    learning_rate_value, accuracy_value = sess.run([lr, accuracy])
-                    logging.info('Current Learning Rate: %s', learning_rate_value)
+                if step % STEPS_PER_EPOCH == 0:
+                    logging.info('Epoch %s/%s', step/STEPS_PER_EPOCH + 1, NUM_EPOCHS)
+                    accuracy_value = sess.run([accuracy])
+                    logging.info('Current Learning Rate: %s', LEARNING_RATE)
                     logging.info('Current Streaming Accuracy: %s', accuracy_value)
 
                     # optionally, print your logits and predictions for a sanity check that things are going fine.
-                    logits_value, probabilities_value, predictions_value, labels_value = sess.run([logits, probabilities, predictions, labels])
+                    logits_value, probabilities_value, predictions_value, labels_value = sess.run([logits, probabilities, predictions, train_labels])
                     print('logits: \n', logits_value)
                     print('Probabilities: \n', probabilities_value)
                     print('predictions: \n', predictions_value)
@@ -284,11 +254,11 @@ def run():
                 else:
                     loss, _ = train_step(sess, train_op, sv.global_step)
 
-            #We log the final training loss and accuracy
+            # We log the final training loss and accuracy
             logging.info('Final Loss: %s', loss)
             logging.info('Final Accuracy: %s', sess.run(accuracy))
 
-            #Once all the training has been done, save the log files and checkpoint model
+            # Once all the training has been done, save the log files and checkpoint model
             logging.info('Finished training! Saving model to disk now.')
             sv.saver.save(sess, sv.save_path, global_step = sv.global_step)
 
