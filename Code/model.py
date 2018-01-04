@@ -21,7 +21,9 @@ DATASET_DIR = '../Dataset/food-101/images'
 
 LOG_DIR = './log'
 
-CHECKPOINT_FILE = './inception_v4.ckpt'
+INCEPTION_CHECKPOINT_FILE = './inception_v4.ckpt'
+
+OUTPUT_CHECKPOINT_FILE = './wcci.ckpt'
 
 IMAGE_SIZE = 299
 
@@ -132,8 +134,8 @@ def load_batch(dataset, batch_size, height=IMAGE_SIZE, width=IMAGE_SIZE, is_trai
     #First create the data_provider object
     data_provider = slim.dataset_data_provider.DatasetDataProvider(
         dataset,
-        common_queue_capacity = 24 + 3 * batch_size,
-        common_queue_min = 24)
+        common_queue_capacity = 50 * batch_size,
+        common_queue_min = 3 * batch_size)
 
     #Obtain the raw image using the get method
     raw_image, label = data_provider.get(['image', 'label'])
@@ -174,10 +176,10 @@ def run():
 
         # Create the training model and the validation model (which doesn't have dropout)
         with slim.arg_scope(inception_arg_scope()):
-            logits, end_points = inception_v4(train_images, num_classes = dataset.num_classes, is_training = True)
+            logits, end_points = inception_v4(train_images, num_classes = dataset.num_classes, is_training=True)
 
         # Define the scopes that you want to exclude for restoration
-        exclude = ['InceptionV4/Logits', 'InceptionV4/AuxLogits']
+        exclude = ['InceptionV4/Logits', 'InceptionV4/AuxLogits', 'Mixed_7d']
         variables_to_restore = slim.get_variables_to_restore(exclude = exclude)
 
         # Performs the equivalent to tf.nn.sparse_softmax_cross_entropy_with_logits but enhanced with checks
@@ -209,12 +211,13 @@ def run():
             '''
             Simply runs a session for the three arguments provided and gives a logging on the time elapsed for each global step
             '''
-            #Check the time for each sess run
+            # Check the time for each sess run
             start_time = time.time()
+
             total_loss, global_step_count, _ = sess.run([train_op, global_step, metrics_op])
             time_elapsed = time.time() - start_time
 
-            #Run the logging to print some results
+            # Run the logging to print some results
             logging.info('global step %s: loss: %.4f (%.2f sec/step)', global_step_count, total_loss, time_elapsed)
 
             return total_loss, global_step_count
@@ -222,7 +225,10 @@ def run():
         #Now we create a saver function that actually restores the variables from a checkpoint file in a sess
         saver = tf.train.Saver(variables_to_restore)
         def restore_fn(sess):
-            return saver.restore(sess, checkpoint_file)
+            if os.path.exists(OUTPUT_CHECKPOINT_FILE):
+                return saver.restore(sess, CHECKPOINT_FILE)
+            else:
+                return saver.restore(sess, INCEPTION_CHECKPOINT_FILE)
 
         #Define your supervisor for running a managed session. Do not run the summary_op automatically or else it will consume too much memory
         sv = tf.train.Supervisor(logdir = LOG_DIR, summary_op = None, init_fn = restore_fn)
