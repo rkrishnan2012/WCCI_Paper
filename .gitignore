@@ -4,5 +4,6 @@ Draft/*
 Code/__pycache__
 Code/._*
 Code/log/*
-inception_v4.ckpt
+inception_resnet_v2/
+validation_log/
 .vscode

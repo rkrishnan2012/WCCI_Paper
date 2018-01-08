@@ -1,29 +1,26 @@
-# The code in this file will be used to train our Inception-V4 based network.
-# 
-# Note: The inception_v4 architecture diagram can be found here: http://yeephycho.github.io/blog_img/Inception_v4_hires.jpg
-#
-# Goals:
-#   * Train a Inception_V4 network using the Food-101 dataset - incomplete
-#
-import tensorflow as tf
-from tensorflow.python.platform import tf_logging as logging
-import inception_preprocessing
-from inception_v4 import inception_v4
-from inception_utils import inception_arg_scope
-from dataset_utils import read_label_file
+"""
+The code in this file will be used to train our Inception-Resnet-V2 based network.
+
+Note: The inception_resnet_v2 architecture diagram can be found here:
+https://1.bp.blogspot.com/-O7AznVGY9js/V8cV_wKKsMI/AAAAAAAABKQ/maO7n2w3dT4Pkcmk7wgGqiSX5FUW2sfZgCLcB/s1600/image00.png
+"""
+import functools
+import itertools
 import os
-import time
-slim = tf.contrib.slim
-get_or_create_global_step = tf.train.get_or_create_global_step
+import six
+
+import tensorflow as tf
+
+import dataset_utils
+import utils
+from inception_resnet_v2 import inception_resnet_v2
+
+tf.logging.set_verbosity(tf.logging.INFO)
 
 # =============== CONFIGURATION ===============
 DATASET_DIR = '../Dataset/food-101/images'
 
-LOG_DIR = './log'
-
-INCEPTION_CHECKPOINT_FILE = './inception_v4.ckpt'
-
-OUTPUT_CHECKPOINT_FILE = './wcci.ckpt'
+LOG_DIR = './inception_resnet_v2'
 
 IMAGE_SIZE = 299
 
@@ -31,13 +28,11 @@ NUM_CLASSES = 101
 
 TFRECORD_FILE_PATTERN = 'foods_%s_*.tfrecord'
 
-STEPS_PER_EPOCH = 100
-
-NUM_EPOCHS = 300
+FILE_PATTERN_FOR_COUNTING = 'foods'
 
 IMAGES_PER_GPU = 8
 
-GPU_COUNT = 1
+GPU_COUNT = 2
 
 BATCH_SIZE = IMAGES_PER_GPU * GPU_COUNT
 
@@ -45,229 +40,255 @@ LEARNING_RATE = 0.002
 
 MOMENTUM = 0.9
 
-#============== DATASET LOADING ======================
-def get_split(split_name, dataset_dir, file_pattern=TFRECORD_FILE_PATTERN, file_pattern_for_counting='foods'):
-    '''
-    Obtains the split - training or validation - to create a Dataset class for feeding the examples into a queue later on. This function will
-    set up the decoder and dataset information all into one Dataset class so that you can avoid the brute work later on.
-    Your file_pattern is very important in locating the files later. 
-    INPUTS:
-    - split_name(str): 'train' or 'validation'. Used to get the correct data split of tfrecord files
-    - dataset_dir(str): the dataset directory where the tfrecord files are located
-    - file_pattern(str): the file name structure of the tfrecord files in order to get the correct data
-    - file_pattern_for_counting(str): the string name to identify your tfrecord files for counting
-    OUTPUTS:
-    - dataset (Dataset): A Dataset class object where we can read its various components for easier batch creation later.
-    '''
+VALIDATION_STEPS = 50
 
-    # First check whether the split_name is train or validation
-    if split_name not in ['train', 'validation']:
-        raise ValueError('The split_name %s is not recognized. Please input either train or validation as the split_name' % (split_name))
+VARIABLE_STRATEGY = 'CPU'
 
-    # Create the full path for a general file_pattern to locate the tfrecord_files
-    file_pattern_path = os.path.join(dataset_dir, file_pattern % (split_name))
+WEIGHT_DECAY = 2e-4
 
-    # Count the total number of examples in all of these shard
-    num_samples = 0
-    file_pattern_for_counting = file_pattern_for_counting + '_' + split_name
-    tfrecords_to_count = [os.path.join(dataset_dir, file) for file in os.listdir(dataset_dir) if file.startswith(file_pattern_for_counting)]
-    for tfrecord_file in tfrecords_to_count:
-        for record in tf.python_io.tf_record_iterator(tfrecord_file):
-            num_samples += 1
+def tower_fn(is_training, feature, label, data_format):
+    """Build computation tower
+    Args:
+        is_training: true if is training graph.
+        feature: a Tensor.
+        label: a Tensor.
+        data_format: Not implemented yet, but change the inception_resnet model
+                to support channels_last (NHWC) or channels_first (NCHW).
+    Returns:
+        A tuple with the loss for the tower, the gradients and parameters, and
+        predictions.
+    """
+    logits, _ = inception_resnet_v2(feature, num_classes=NUM_CLASSES,
+                                    is_training=is_training)
 
-    # Create a reader, which must be a TFRecord reader in this case
-    reader = tf.TFRecordReader
-
-    # Create the keys_to_features dictionary for the decoder
-    keys_to_features = {
-      'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
-      'image/format': tf.FixedLenFeature((), tf.string, default_value='jpg'),
-      'image/class/label': tf.FixedLenFeature(
-          [], tf.int64, default_value=tf.zeros([], dtype=tf.int64)),
+    tower_pred = {
+        'classes': tf.argmax(input=logits, axis=1),
+        'probabilities': tf.nn.softmax(logits)
     }
 
-    # Create the items_to_handlers dictionary for the decoder.
-    items_to_handlers = {
-    'image': slim.tfexample_decoder.Image(),
-    'label': slim.tfexample_decoder.Tensor('image/class/label'),
-    }
+    tower_loss = tf.losses.sparse_softmax_cross_entropy(logits=logits, labels=label)
+    tower_loss = tf.reduce_mean(tower_loss)
 
-    # Create the items_to_descriptions dictionary for the decoder.
-    items_to_descriptions = {
-        'image': 'A 3-channel RGB coloured flower image that is either tulips, sunflowers, roses, dandelion, or daisy.',
-        'label': 'A label that is as such -- 0:daisy, 1:dandelion, 2:roses, 3:sunflowers, 4:tulips'
-    }
+    model_params = tf.trainable_variables()
+    tower_loss += WEIGHT_DECAY * tf.add_n(
+        [tf.nn.l2_loss(v) for v in model_params])
 
-    #Start to create the decoder
-    decoder = slim.tfexample_decoder.TFExampleDecoder(keys_to_features, items_to_handlers)
+    tower_grad = tf.gradients(tower_loss, model_params)
 
-    #Create the labels_to_name file
-    labels_to_name_dict = read_label_file(dataset_dir)
-
-    #Actually create the dataset
-    dataset = slim.dataset.Dataset(
-        data_sources = file_pattern_path,
-        decoder = decoder,
-        reader = reader,
-        num_readers = 4,
-        num_samples = num_samples,
-        num_classes = NUM_CLASSES,
-        labels_to_name = labels_to_name_dict,
-        items_to_descriptions=items_to_descriptions)
-
-    return dataset
+    return tower_loss, zip(tower_grad, model_params), tower_pred
 
 
-def load_batch(dataset, batch_size, height=IMAGE_SIZE, width=IMAGE_SIZE, is_training=True):
-    '''
-    Loads a batch for training.
-    INPUTS:
-    - dataset(Dataset): a Dataset class object that is created from the get_split function
-    - batch_size(int): determines how big of a batch to train
-    - height(int): the height of the image to resize to during preprocessing
-    - width(int): the width of the image to resize to during preprocessing
-    - is_training(bool): to determine whether to perform a training or evaluation preprocessing
-    OUTPUTS:
-    - images(Tensor): a Tensor of the shape (batch_size, height, width, channels) that contain one batch of images
-    - labels(Tensor): the batch's labels with the shape (batch_size,) (requires one_hot_encoding).
-    '''
-    #First create the data_provider object
-    data_provider = slim.dataset_data_provider.DatasetDataProvider(
-        dataset,
-        common_queue_capacity = 50 * batch_size,
-        common_queue_min = 3 * batch_size)
+def model_fn(features, labels, mode, params):
+    """Inception_Resnet_V2 model body.
+    Support single host, one or more GPU training. Parameter distribution can
+    be either one of the following scheme.
+    1. CPU is the parameter server and manages gradient updates.
+    2. Parameters are distributed evenly across all GPUs, and the first GPU
+       manages gradient updates.
+    Args:
+      features: a list of tensors, one for each tower
+      labels: a list of tensors, one for each tower
+      mode: ModeKeys.TRAIN or EVAL
+      params: Hyperparameters suitable for tuning
+    Returns:
+      A EstimatorSpec object.
+    """
+    is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
-    #Obtain the raw image using the get method
-    raw_image, label = data_provider.get(['image', 'label'])
+    tower_features = features
+    tower_labels = labels
+    tower_losses = []
+    tower_gradvars = []
+    tower_preds = []
 
-    #Perform the correct preprocessing for this image depending if it is training or evaluating
-    image = inception_preprocessing.preprocess_image(raw_image, height, width, is_training)
+    # channels first (NCHW) is normally optimal on GPU and channels last (NHWC)
+    # on CPU. The exception is Intel MKL on CPU which is optimal with
+    # channels_last.
+    data_format = None
+    if not data_format:
+        if GPU_COUNT == 0:
+            data_format = 'channels_last'
+        else:
+            data_format = 'channels_first'
 
-    #As for the raw images, we just do a simple reshape to batch it up
-    raw_image = tf.expand_dims(raw_image, 0)
-    raw_image = tf.image.resize_nearest_neighbor(raw_image, [height, width])
-    raw_image = tf.squeeze(raw_image)
+    if GPU_COUNT == 0:
+        num_devices = 1
+        device_type = 'cpu'
+    else:
+        num_devices = GPU_COUNT
+        device_type = 'gpu'
 
-    #Batch up the image by enqueing the tensors internally in a FIFO queue and dequeueing many elements with tf.train.batch.
-    images, raw_images, labels = tf.train.batch(
-        [image, raw_image, label],
-        batch_size = batch_size,
-        num_threads = 4,
-        capacity = 4 * batch_size,
-        allow_smaller_final_batch = True)
+    for i in range(num_devices):
+        worker_device = '/{}:{}'.format(device_type, i)
+        if VARIABLE_STRATEGY == 'CPU':
+            device_setter = utils.local_device_setter(worker_device=worker_device)
+        elif VARIABLE_STRATEGY == 'GPU':
+            device_setter = utils.local_device_setter(
+                ps_device_type='gpu',
+                worker_device=worker_device,
+                ps_strategy=tf.contrib.training.GreedyLoadBalancingStrategy(
+                    GPU_COUNT, tf.contrib.training.byte_size_load_fn))
+        with tf.variable_scope('InceptionResnetV2', reuse=bool(i != 0)):
+            with tf.name_scope('tower_%d' % i) as name_scope:
+                with tf.device(device_setter):
+                    loss, gradvars, preds = tower_fn(is_training, tower_features[i],
+                                                     tower_labels[i], data_format)
+                    tower_losses.append(loss)
+                    tower_gradvars.append(gradvars)
+                    tower_preds.append(preds)
+                    if i == 0:
+                        # Only trigger batch_norm moving mean and variance update from
+                        # the 1st tower. Ideally, we should grab the updates from all
+                        # towers but these stats accumulate extremely fast so we can
+                        # ignore the other stats from the other towers without
+                        # significant detriment.
+                        update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS,
+                                                       name_scope)
 
-    return images, raw_images, labels
-
-def run():
-    #Create the log directory here. Must be done here otherwise import will activate this unneededly.
-    if not os.path.exists(LOG_DIR):
-        os.mkdir(LOG_DIR)
-
-    #======================= TRAINING PROCESS =========================
-    with tf.Graph().as_default() as graph:
-        tf.logging.set_verbosity(tf.logging.INFO) #Set the verbosity to INFO level
-
-        # First create the dataset and load one batch
-        dataset = get_split('train', DATASET_DIR, file_pattern=TFRECORD_FILE_PATTERN)
-        train_images, _, train_labels = load_batch(dataset, batch_size=BATCH_SIZE)
-
-        # Perform one-hot-encoding of the labels (Try one-hot-encoding within the load_batch function!)
-        one_hot_labels = slim.one_hot_encoding(train_labels, dataset.num_classes)
-
-        # Create the training model and the validation model (which doesn't have dropout)
-        with slim.arg_scope(inception_arg_scope()):
-            logits, end_points = inception_v4(train_images, num_classes = dataset.num_classes, is_training=True)
-
-        # Define the scopes that you want to exclude for restoration
-        exclude = ['InceptionV4/Logits', 'InceptionV4/AuxLogits', 'Mixed_7d']
-        variables_to_restore = slim.get_variables_to_restore(exclude = exclude)
-
-        # Performs the equivalent to tf.nn.sparse_softmax_cross_entropy_with_logits but enhanced with checks
-        loss = tf.losses.softmax_cross_entropy(onehot_labels = one_hot_labels, logits = logits)
-        total_loss = tf.losses.get_total_loss()    # obtain the regularization losses as well
-
-        # Now we can define the optimizer that takes on the learning rate
-        optimizer = tf.train.MomentumOptimizer(learning_rate=LEARNING_RATE, momentum=MOMENTUM)
-
-        # Create the train_op.
-        train_op = slim.learning.create_train_op(total_loss, optimizer)
-
-        # State the metrics that you want to predict. We get a predictions that is not one_hot_encoded.
-        predictions = tf.argmax(end_points['Predictions'], 1)
-        probabilities = end_points['Predictions']
-
-        accuracy, accuracy_update = tf.contrib.metrics.streaming_accuracy(predictions, train_labels)
-        
-        metrics_op = tf.group(accuracy_update, probabilities)
-
-        #Now finally create all the summaries you need to monitor and group them into one summary op.
-        tf.summary.scalar('Losses_Training', total_loss)
-        tf.summary.scalar('Accuracy_Training', accuracy)
-        tf.summary.scalar('LearningRate', LEARNING_RATE)
-        my_summary_op = tf.summary.merge_all()
-
-        #Now we need to create a training step function that runs both the train_op, metrics_op and updates the global_step concurrently.
-        def train_step(sess, train_op, global_step):
-            '''
-            Simply runs a session for the three arguments provided and gives a logging on the time elapsed for each global step
-            '''
-            # Check the time for each sess run
-            start_time = time.time()
-
-            total_loss, global_step_count, _ = sess.run([train_op, global_step, metrics_op])
-            time_elapsed = time.time() - start_time
-
-            # Run the logging to print some results
-            logging.info('global step %s: loss: %.4f (%.2f sec/step)', global_step_count, total_loss, time_elapsed)
-
-            return total_loss, global_step_count
-
-        #Now we create a saver function that actually restores the variables from a checkpoint file in a sess
-        saver = tf.train.Saver(variables_to_restore)
-        def restore_fn(sess):
-            if os.path.exists(OUTPUT_CHECKPOINT_FILE):
-                return saver.restore(sess, CHECKPOINT_FILE)
-            else:
-                return saver.restore(sess, INCEPTION_CHECKPOINT_FILE)
-
-        #Define your supervisor for running a managed session. Do not run the summary_op automatically or else it will consume too much memory
-        sv = tf.train.Supervisor(logdir = LOG_DIR, summary_op = None, init_fn = restore_fn)
-
-        #Run the managed session
-        with sv.managed_session() as sess:
-            for step in range(STEPS_PER_EPOCH * NUM_EPOCHS):
-                #At the start of every epoch, show the vital information:
-                if step % STEPS_PER_EPOCH == 0:
-                    logging.info('Epoch %s/%s', step/STEPS_PER_EPOCH + 1, NUM_EPOCHS)
-                    accuracy_value = sess.run([accuracy])
-                    logging.info('Current Learning Rate: %s', LEARNING_RATE)
-                    logging.info('Current Streaming Accuracy: %s', accuracy_value)
-
-                    # optionally, print your logits and predictions for a sanity check that things are going fine.
-                    logits_value, probabilities_value, predictions_value, labels_value = sess.run([logits, probabilities, predictions, train_labels])
-                    print('logits: \n', logits_value)
-                    print('Probabilities: \n', probabilities_value)
-                    print('predictions: \n', predictions_value)
-                    print('Labels:\n:', labels_value)
-
-                #Log the summaries every 10 step.
-                if step % 10 == 0:
-                    loss, _ = train_step(sess, train_op, sv.global_step)
-                    summaries = sess.run(my_summary_op)
-                    sv.summary_computed(sess, summaries)
-                    
-                #If not, simply run the training step
+    # Now compute global loss and gradients.
+    gradvars = []
+    with tf.name_scope('gradient_ing'):
+        all_grads = {}
+        for grad, var in itertools.chain(*tower_gradvars):
+            if grad is not None:
+                all_grads.setdefault(var, []).append(grad)
+        for var, grads in six.iteritems(all_grads):
+            # Average gradients on the same device as the variables
+            # to which they apply.
+            with tf.device(var.device):
+                if len(grads) == 1:
+                    avg_grad = grads[0]
                 else:
-                    loss, _ = train_step(sess, train_op, sv.global_step)
+                    avg_grad = tf.multiply(tf.add_n(grads), 1. / len(grads))
+            gradvars.append((avg_grad, var))
 
-            # We log the final training loss and accuracy
-            logging.info('Final Loss: %s', loss)
-            logging.info('Final Accuracy: %s', sess.run(accuracy))
+    # Device that runs the ops to apply global gradient updates.
+    consolidation_device = '/gpu:0' if VARIABLE_STRATEGY == 'GPU' else '/cpu:0'
+    with tf.device(consolidation_device):
+        loss = tf.reduce_mean(tower_losses, name='loss')
 
-            # Once all the training has been done, save the log files and checkpoint model
-            logging.info('Finished training! Saving model to disk now.')
-            sv.saver.save(sess, sv.save_path, global_step = sv.global_step)
+        examples_sec_hook = utils.ExamplesPerSecondHook(BATCH_SIZE, every_n_steps=10)
+
+        learning_rate = tf.constant(LEARNING_RATE)
+
+        tensors_to_log = {'learning_rate': learning_rate, 'loss': loss}
+
+        logging_hook = tf.train.LoggingTensorHook(
+            tensors=tensors_to_log, every_n_iter=100)
+
+        train_hooks = [logging_hook, examples_sec_hook]
+
+        optimizer = tf.train.MomentumOptimizer(learning_rate=learning_rate, momentum=MOMENTUM)
+
+        # Create single grouped train op
+        train_op = [
+            optimizer.apply_gradients(gradvars, global_step=tf.train.get_global_step())
+        ]
+        train_op.extend(update_ops)
+        train_op = tf.group(*train_op)
+
+        predictions = {
+            'classes':
+                tf.concat([p['classes'] for p in tower_preds], axis=0),
+            'probabilities':
+                tf.concat([p['probabilities'] for p in tower_preds], axis=0)
+        }
+        stacked_labels = tf.concat(labels, axis=0)
+        metrics = {
+            'accuracy':
+                tf.metrics.accuracy(stacked_labels, predictions['classes'])
+        }
+
+    return tf.estimator.EstimatorSpec(
+        mode=mode,
+        predictions=predictions,
+        loss=loss,
+        train_op=train_op,
+        training_hooks=train_hooks,
+        eval_metric_ops=metrics)
+
+def input_fn(split_name, is_training):
+    """Create input graph for model.
+    Args:
+      split_name: one of 'train', 'validate' and 'eval'.
+    Returns:
+      two lists of tensors for features and labels, each of GPU_COUNT length.
+    """
+    with tf.device('/cpu:0'):
+        dataset = dataset_utils.get_split(split_name, DATASET_DIR, NUM_CLASSES,
+                                          TFRECORD_FILE_PATTERN, FILE_PATTERN_FOR_COUNTING)
+        image_batch, _, label_batch = dataset_utils.load_batch(dataset, \
+            BATCH_SIZE, IMAGE_SIZE, IMAGE_SIZE, is_training)
+        if GPU_COUNT <= 1:
+            # No GPU available or only 1 GPU.
+            return [image_batch], [label_batch]
+
+        # Note that passing num=batch_size is safe here, even though
+        # dataset.batch(batch_size) can, in some cases, return fewer than batch_size
+        # examples. This is because it does so only when repeating for a limited
+        # number of epochs, but our dataset repeats forever.
+        image_batch = tf.unstack(image_batch, num=BATCH_SIZE, axis=0)
+        label_batch = tf.unstack(label_batch, num=BATCH_SIZE, axis=0)
+        feature_shards = [[] for i in range(GPU_COUNT)]
+        label_shards = [[] for i in range(GPU_COUNT)]
+        for i in range(BATCH_SIZE):
+            idx = i % GPU_COUNT
+            feature_shards[idx].append(image_batch[i])
+            label_shards[idx].append(label_batch[i])
+        feature_shards = [tf.parallel_stack(x) for x in feature_shards]
+        label_shards = [tf.parallel_stack(x) for x in label_shards]
+        return feature_shards, label_shards
+
+def experiment_fn(run_config, hparams):
+    """
+    This is a method passed to tf.contrib.learn.learn_runner that will
+    return an instance of an Experiment.
+    """
+
+    train_input_fn = functools.partial(
+        input_fn,
+        split_name='train',
+        is_training=True)
+
+    eval_input_fn = functools.partial(
+        input_fn,
+        split_name='validation',
+        is_training=True)
+
+    classifier = tf.estimator.Estimator(
+        model_fn=model_fn,
+        config=run_config,
+        params=hparams)
+
+    return tf.contrib.learn.Experiment(
+        classifier,
+        train_input_fn=train_input_fn,
+        eval_input_fn=eval_input_fn,
+        train_steps=None, # Train forever
+        eval_steps=VALIDATION_STEPS)
+
+
+
+def train():
+    """
+    Begins training the entire architecture.
+    """
+    # Session configuration.
+    sess_config = tf.ConfigProto(
+        allow_soft_placement=True,
+        log_device_placement=False,
+        intra_op_parallelism_threads=0, # Autocompute how many threads to run
+        gpu_options=tf.GPUOptions(force_gpu_compatible=True))
+
+    config = tf.contrib.learn.RunConfig(session_config=sess_config, model_dir=LOG_DIR)
+    tf.contrib.learn.learn_runner.run(
+        experiment_fn,
+        run_config=config,
+        hparams=tf.contrib.training.HParams(is_chief=config.is_chief))
 
 
 if __name__ == '__main__':
-    run()
+    # A (supposed) 5% percent boost in certain GPUs by using faster convolution operations
+    os.environ['TF_SYNC_ON_FINISH'] = '0'
+    os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'
+    train()
