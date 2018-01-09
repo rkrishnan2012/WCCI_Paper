@@ -20,7 +20,7 @@ tf.logging.set_verbosity(tf.logging.INFO)
 # =============== CONFIGURATION ===============
 DATASET_DIR = '../Dataset/food-101/images'
 
-LOG_DIR = './inception_resnet_v2'
+LOG_DIR = './rmsprop'
 
 IMAGE_SIZE = 299
 
@@ -36,15 +36,19 @@ GPU_COUNT = 2
 
 BATCH_SIZE = IMAGES_PER_GPU * GPU_COUNT
 
-LEARNING_RATE = 0.002
+LEARNING_RATE = 0.045
 
-MOMENTUM = 0.9
+DECAY = 0.9
 
 VALIDATION_STEPS = 50
 
-VARIABLE_STRATEGY = 'CPU'
+STEPS_PER_EPOCH = 101000 / BATCH_SIZE
+
+VARIABLE_STRATEGY = 'GPU'
 
 WEIGHT_DECAY = 2e-4
+
+LEARNING_RATE_DECAY_FACTOR = 0.94
 
 def tower_fn(is_training, feature, label, data_format):
     """Build computation tower
@@ -58,7 +62,7 @@ def tower_fn(is_training, feature, label, data_format):
         A tuple with the loss for the tower, the gradients and parameters, and
         predictions.
     """
-    logits, _ = inception_resnet_v2(feature, num_classes=NUM_CLASSES,
+    logits, endpoints = inception_resnet_v2(feature, num_classes=NUM_CLASSES,
                                     is_training=is_training)
 
     tower_pred = {
@@ -67,7 +71,12 @@ def tower_fn(is_training, feature, label, data_format):
     }
 
     tower_loss = tf.losses.sparse_softmax_cross_entropy(logits=logits, labels=label)
-    tower_loss = tf.reduce_mean(tower_loss)
+    
+    aux_tower_loss = 0.4 * tf.losses.sparse_softmax_cross_entropy(logits=logits,
+                                 labels=label,
+                                 scope='aux_loss')
+
+    tower_loss = tf.reduce_mean(tower_loss + aux_tower_loss)
 
     model_params = tf.trainable_variables()
     tower_loss += WEIGHT_DECAY * tf.add_n(
@@ -143,7 +152,7 @@ def model_fn(features, labels, mode, params):
                         # ignore the other stats from the other towers without
                         # significant detriment.
                         update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS,
-                                                       name_scope)
+                                                       name_scope)  
 
     # Now compute global loss and gradients.
     gradvars = []
@@ -169,7 +178,12 @@ def model_fn(features, labels, mode, params):
 
         examples_sec_hook = utils.ExamplesPerSecondHook(BATCH_SIZE, every_n_steps=10)
 
-        learning_rate = tf.constant(LEARNING_RATE)
+        # Define your exponentially decaying learning rate
+        learning_rate = tf.train.exponential_decay(
+            learning_rate = LEARNING_RATE,
+            global_step = tf.train.get_global_step(),
+            decay_steps = STEPS_PER_EPOCH * 2,
+            decay_rate = LEARNING_RATE_DECAY_FACTOR)
 
         tensors_to_log = {'learning_rate': learning_rate, 'loss': loss}
 
@@ -178,11 +192,12 @@ def model_fn(features, labels, mode, params):
 
         train_hooks = [logging_hook, examples_sec_hook]
 
-        optimizer = tf.train.MomentumOptimizer(learning_rate=learning_rate, momentum=MOMENTUM)
+        optimizer = tf.train.RMSPropOptimizer(learning_rate=learning_rate, decay=DECAY)
 
         # Create single grouped train op
         train_op = [
-            optimizer.apply_gradients(gradvars, global_step=tf.train.get_global_step())
+            optimizer.apply_gradients(
+                gradvars, global_step=tf.train.get_global_step())
         ]
         train_op.extend(update_ops)
         train_op = tf.group(*train_op)
@@ -253,7 +268,7 @@ def experiment_fn(run_config, hparams):
     eval_input_fn = functools.partial(
         input_fn,
         split_name='validation',
-        is_training=True)
+        is_training=False)
 
     classifier = tf.estimator.Estimator(
         model_fn=model_fn,
