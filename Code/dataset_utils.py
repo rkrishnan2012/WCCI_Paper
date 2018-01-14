@@ -96,7 +96,7 @@ def get_split(split_name, dataset_dir, num_classes, file_pattern='foods_%s_*.tfr
         data_sources = file_pattern_path,
         decoder = decoder,
         reader = reader,
-        num_readers = 4,
+        num_readers = 8,
         num_samples = num_samples,
         num_classes = num_classes,
         labels_to_name = labels_to_name_dict,
@@ -121,7 +121,7 @@ def load_batch(dataset, batch_size, height, width, is_training=True):
     #First create the data_provider object
     data_provider = slim.dataset_data_provider.DatasetDataProvider(
         dataset,
-        common_queue_capacity = 50 * batch_size,
+        common_queue_capacity = 24 * batch_size,
         common_queue_min = 3 * batch_size)
 
     #Obtain the raw image using the get method
@@ -139,8 +139,8 @@ def load_batch(dataset, batch_size, height, width, is_training=True):
     images, raw_images, labels = tf.train.batch(
         [image, raw_image, label],
         batch_size = batch_size,
-        num_threads = 4,
-        capacity = 4 * batch_size,
+        num_threads = 8,
+        capacity = 8 * batch_size,
         allow_smaller_final_batch = True)
 
     return images, raw_images, labels

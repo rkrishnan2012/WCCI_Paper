@@ -40,6 +40,16 @@ def local_device_setter(num_devices=1,
             return worker_device_spec.to_string()
     return _local_device_chooser
 
+class IteratorInitializerHook(session_run_hook.SessionRunHook):
+    """Hook to initialise data iterator after Session is created."""
+
+    def __init__(self):
+        super(IteratorInitializerHook, self).__init__()
+
+    def after_create_session(self, session, coord):
+        """Initialise the iterator after the session has been created."""
+        # import pdb; pdb.set_trace()
+    
 class ExamplesPerSecondHook(session_run_hook.SessionRunHook):
   """Hook to print out examples per second.
     Total time is tracked and then divided by the total number of steps

@@ -3,7 +3,7 @@ Related\ Papers/*
 Draft/*
 Code/__pycache__
 Code/._*
-Code/log/*
-inception_resnet_v2/
-validation_log/
 .vscode
+Code/momentum-food101
+Code/pretrained-inception-resnet-v2
+Code/rmsprop-food101
