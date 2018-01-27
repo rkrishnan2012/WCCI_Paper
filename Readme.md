@@ -1,5 +1,5 @@
 # Babysitting an Inception-Resnet-V2 food classifier
-## Achieving state of the art accuracy in food classification using an Inception-Resnet-V2 network. Built to train and evaluate on multiple GPUs.
+## Achieving state of the art accuracy in food classification by transfer learning from an Inception-Resnet-V2 network. Built to train and evaluate on multiple GPUs in parallel.
 
 
 ### Dataset Preparation
