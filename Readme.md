@@ -1,4 +1,4 @@
-# Transfer learning and babysitting a food classification network
+# Babysitting an Inception-Resnet-V2 food classifier
 ## Achieving state of the art accuracy in food classification using an Inception-Resnet-V2 network. Built to train and evaluate on multiple GPUs.
 
 
@@ -7,7 +7,7 @@ The primary dataset used in this paper to perform classification is the Food-101
 The same procedure can be applied to the UECFood-256[2] and UECFood-100 datasets[3]. 
 
 * Begin by downloading and extracting the Food-101 dataset:
-    ```
+    ```bash
     cd Dataset
     curl http://data.vision.ee.ethz.ch/cvl/food-101.tar.gz
     tar -xzf food-101.tar.gz
@@ -15,7 +15,7 @@ The same procedure can be applied to the UECFood-256[2] and UECFood-100 datasets
     ```
 
 * Convert the dataset into TFrecord files for easily feeding into data pipeline (takes ~5mins on 1060 TI gpu):
-    ```
+    ```bash
     cd Code
     python3 convert_dataset.py --tfrecord_filename=foods --dataset_dir="../Dataset/food-101/images"
     cd ..
@@ -26,7 +26,7 @@ The same procedure can be applied to the UECFood-256[2] and UECFood-100 datasets
 * Download a pre-trained model, or rename the included `pretrained-inception-resenet-v2` model to fit your needs.
 
 * Run the model training process. This code will evaluate the model every epoch for 50 steps.
-    ```
+    ```bash
     python model.py --model=pretrained-inception-resnet-v2 --dataset=../Dataset/FOOD101/images
     ```
 
