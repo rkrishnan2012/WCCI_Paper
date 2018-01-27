@@ -10,6 +10,9 @@ from tensorflow.python.training import session_run_hook
 from tensorflow.python.training import training_util
 from tensorflow.python.framework import device as pydev
 from tensorflow.core.framework import node_def_pb2
+from tensorflow.python.training.saver import Saver
+from tensorflow.python.framework import ops
+from tensorflow.python.ops import variables
 
 def local_device_setter(num_devices=1,
                         ps_device_type='cpu',
@@ -48,7 +51,6 @@ class IteratorInitializerHook(session_run_hook.SessionRunHook):
 
     def after_create_session(self, session, coord):
         """Initialise the iterator after the session has been created."""
-        # import pdb; pdb.set_trace()
     
 class ExamplesPerSecondHook(session_run_hook.SessionRunHook):
   """Hook to print out examples per second.
@@ -108,3 +110,39 @@ class ExamplesPerSecondHook(session_run_hook.SessionRunHook):
         print('%s: %g (%g), step = %g', 'Average examples/sec',
                      average_examples_per_sec, current_examples_per_sec,
                      self._total_steps)
+
+# def setup_savers():
+#     collection_key = ops.GraphKeys.SAVERS
+#     saver = MultiSaver(sharded=True, allow_empty=True)
+#     ops.add_to_collection(collection_key, saver)
+#     import pdb; pdb.set_trace()
+
+
+# class MultiSaver(Saver):
+#     def _build(self, checkpoint_path, build_save, build_restore):
+#         import pdb; pdb.set_trace()
+#         print("HEYYYAAAAAAAAA!!!")
+#         temp_list = variables._all_saveable_objects()
+#         self._var_list = []
+#         for var in temp_list:
+#           if "/Momentum" not in var.name and "Logits" not in var.name:
+#              self._var_list.append(var)
+#         return super(MultiSaver, self)._build(checkpoint_path, build_save, build_restore)
+    
+#     def build(self):
+#         import pdb; pdb.set_trace()
+#         return self._build(self._filename, build_save=True, build_restore=True)
+
+#     def recover_last_checkpoints(self, checkpoint_paths):
+#         super(MultiSaver).recover_last_checkpoints(self, checkpoint_paths)
+#         import pdb; pdb.set_trace()
+#         # ops.get_default_graph()._finalized = False # lol
+#         # init_op = tf.global_variables_initializer()
+#         # sess.run(init_op)
+#         # sess.run(tf.report_uninitialized_variables())
+#         # import pdb; pdb.set_trace()
+#         # saver = tf.train.Saver()
+#         # from tensorflow.python.ops import variables
+#         # saver._var_list = variables._all_saveable_objects()
+#         # import pdb; pdb.set_trace()
+#         # saver.save(sess, './first')

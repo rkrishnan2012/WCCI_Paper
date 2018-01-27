@@ -12,7 +12,7 @@ import six
 import tensorflow as tf
 
 import dataset_utils
-import utils
+import utils 
 from inception_resnet_v2 import inception_resnet_v2, inception_resnet_v2_arg_scope
 
 slim = tf.contrib.slim
@@ -20,37 +20,35 @@ slim = tf.contrib.slim
 tf.logging.set_verbosity(tf.logging.INFO)
 
 # =============== CONFIGURATION ===============
-DATASET_DIR = '../Dataset/food-101/images'
+DATASET_DIR = '../Dataset/UECFOOD100/'
 
-LOG_DIR = './rmsprop-food101'
+LOG_DIR = './momentum-UECFOOD100'
 
 IMAGE_SIZE = 299
 
-NUM_CLASSES = 101
+NUM_CLASSES = 100
 
-TFRECORD_FILE_PATTERN = 'foods_%s_*.tfrecord'
+TFRECORD_FILE_PATTERN = 'UECFOOD100_%s_*.tfrecord'
 
-FILE_PATTERN_FOR_COUNTING = 'foods'
+FILE_PATTERN_FOR_COUNTING = 'UECFOOD100'
 
 IMAGES_PER_GPU = 8
 
 GPU_COUNT = 2
-
+  
 BATCH_SIZE = IMAGES_PER_GPU * GPU_COUNT
 
-LEARNING_RATE = 0.045
+LEARNING_RATE = 0.005
 
-MOMENTUM = 0
+MOMENTUM = 0.9
 
 VALIDATION_STEPS = 50
 
 VARIABLE_STRATEGY = 'CPU'
-
+ 
 WEIGHT_DECAY = 2e-4
 
 DECAY=0.9
-
-LEARNING_RATE_DECAY=0.94
 
 def tower_fn(is_training, feature, label, data_format):
     """Build computation tower
@@ -184,14 +182,8 @@ def model_fn(features, labels, mode, params):
         examples_sec_hook = utils.ExamplesPerSecondHook(BATCH_SIZE, every_n_steps=10)
 
         global_step = tf.train.get_global_step()
-
-        #Define your exponentially decaying learning rate
-        learning_rate = tf.train.exponential_decay(
-            learning_rate = LEARNING_RATE,
-            global_step = global_step,
-            decay_steps = (2 * 101000) / BATCH_SIZE,
-            decay_rate = LEARNING_RATE_DECAY,
-            staircase = True)
+    
+        learning_rate = tf.constant(LEARNING_RATE)
 
         tensors_to_log = {'learning_rate': learning_rate, 'loss': loss}
 
@@ -202,7 +194,7 @@ def model_fn(features, labels, mode, params):
 
         train_hooks = [initializer_hook, logging_hook, examples_sec_hook]
 
-        optimizer = tf.train.RMSPropOptimizer(learning_rate=learning_rate, decay=DECAY, momentum=MOMENTUM)
+        optimizer = tf.train.MomentumOptimizer(learning_rate=LEARNING_RATE, momentum=MOMENTUM)
 
         # Create single grouped train op
         train_op = [
@@ -312,6 +304,7 @@ def train():
 
 
 if __name__ == '__main__':
+    #setup_savers()
     # A (supposed) 5% percent boost in certain GPUs by using faster convolution operations
     os.environ['TF_SYNC_ON_FINISH'] = '0'
     os.environ['TF_ENABLE_WINOGRAD_NONFUSED'] = '1'

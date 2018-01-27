@@ -7,8 +7,11 @@
 # FULL CREDIT FOR THIS CODE: https://kwotsin.github.io/tech/2017/01/29/tfrecords.html
 
 import random
+import os
+import math
 import tensorflow as tf
-from dataset_utils import _dataset_exists, _get_filenames_and_classes, write_label_file, _convert_dataset
+from dataset_utils import _dataset_exists, _get_filenames_and_classes, \
+     write_label_file, _convert_dataset
 
 #===============DEFINE YOUR ARGUMENTS==============
 flags = tf.app.flags
@@ -48,6 +51,14 @@ def main():
 
     #Get a list of photo_filenames like ['123.jpg', '456.jpg'...] and a list of sorted class names from parsing the subdirectories.
     photo_filenames, class_names = _get_filenames_and_classes(FLAGS.dataset_dir, output_filename=FLAGS.tfrecord_filename)
+
+    # Some datasets have a "categories" file with actual names those photo_names correspond to
+    # such as UECFOOD256 dataset. Let's map it out.
+    # if os.path.exists(os.path.join(FLAGS.dataset_dir, 'category.txt')):
+    #     with open(os.path.join(FLAGS.dataset_dir, 'category.txt')) as cat_file:
+    #         replacement_dict = [cat_name.split('\t') for cat_name in cat_file]
+    #         class_names = [replacement_dict[int(class_name)][1].replace('\n','') for class_name in class_names]
+    #         import pdb; pdb.set_trace()
 
     #Refer each of the class name to a specific integer number for predictions later
     class_names_to_ids = dict(zip(class_names, range(len(class_names))))
